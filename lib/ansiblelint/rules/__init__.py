@@ -5,18 +5,20 @@ import logging
 import os
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from importlib.abc import Loader
 from time import sleep
 from typing import List
 
 import ansiblelint.utils
 from ansiblelint.errors import MatchError
+from ansiblelint.file_utils import TargetFile
 from ansiblelint.skip_utils import append_skipped_rules, get_rule_skips_from_line
 
 _logger = logging.getLogger(__name__)
 
 
-class AnsibleLintRule(object):
+class AnsibleLintRule:
 
     def __repr__(self) -> str:
         """Return a AnsibleLintRule instance representation."""
@@ -31,9 +33,11 @@ class AnsibleLintRule(object):
     description: str = ""
     version_added: str = ""
     severity: str = ""
-    match = None
     matchtask = None
     matchplay = None
+
+    def match(self, file: "TargetFile", line: str = "") -> List[MatchError]:
+        return []
 
     @staticmethod
     def unjinja(text):
@@ -49,14 +53,14 @@ class AnsibleLintRule(object):
             details: str = "",
             filename: str = None) -> MatchError:
         return MatchError(
-            message=message,
+            message=message or self.shortdesc,
             linenumber=linenumber,
             details=details,
             filename=filename,
             rule=self
             )
 
-    def matchlines(self, file, text) -> List[MatchError]:
+    def matchlines(self, file: "TargetFile", text: str) -> List[MatchError]:
         matches: List[MatchError] = []
         if not self.match:
             return matches
@@ -71,22 +75,20 @@ class AnsibleLintRule(object):
                 continue
 
             result = self.match(file, line)
-            if not result:
-                continue
-            message = None
-            if isinstance(result, str):
-                message = result
-            m = self.create_matcherror(
-                message=message,
-                linenumber=prev_line_no + 1,
-                details=line,
-                filename=file['path'])
-            matches.append(m)
+            if not isinstance(result, Sequence) or isinstance(result, str):
+                result = [
+                    MatchError(
+                        message=(
+                            f"Ignored deprecated match() return value: {result}, see "
+                            "https://github.com/ansible-community/ansible-lint/pull/1120"),
+                        rule=RuntimeErrorRule)
+                ]
+            matches.extend(result)
         return matches
 
     # TODO(ssbarnea): Reduce mccabe complexity
     # https://github.com/ansible/ansible-lint/issues/744
-    def matchtasks(self, file: str, text: str) -> List[MatchError]:  # noqa: C901
+    def matchtasks(self, file: TargetFile, text: str) -> List[MatchError]:  # noqa: C901
         matches: List[MatchError] = []
         if not self.matchtask:
             return matches
@@ -135,7 +137,7 @@ class AnsibleLintRule(object):
             linenumber = play[ansiblelint.utils.LINE_NUMBER_KEY]
         return linenumber
 
-    def matchyaml(self, file: str, text: str) -> List[MatchError]:
+    def matchyaml(self, file: TargetFile, text: str) -> List[MatchError]:
         matches: List[MatchError] = []
         if not self.matchplay:
             return matches
@@ -174,6 +176,17 @@ class AnsibleLintRule(object):
         return matches
 
 
+class RuntimeErrorRule(AnsibleLintRule):
+    """Used to identify errors."""
+
+    id = '902'
+    shortdesc = 'Unexpected internal error.'
+    description = 'This error can be caused by outdated custom rules.'
+    severity = 'VERY_HIGH'
+    tags = ['core']
+    version_added = 'v4.4.0'
+
+
 def load_plugins(directory: str) -> List[AnsibleLintRule]:
     """Return a list of rule classes."""
     result = []
@@ -199,6 +212,9 @@ class RulesCollection(object):
             rulesdirs = []
         self.rulesdirs = ansiblelint.utils.expand_paths_vars(rulesdirs)
         self.rules: List[AnsibleLintRule] = []
+        # internal rules included in order to expose them for docs as they are
+        # not directly loaded by our rule loader.
+        self.rules.append(RuntimeErrorRule())  # type: ignore
         for rulesdir in self.rulesdirs:
             _logger.debug("Loading rules from %s", rulesdir)
             self.extend(load_plugins(rulesdir))
@@ -218,7 +234,7 @@ class RulesCollection(object):
     def extend(self, more: List[AnsibleLintRule]) -> None:
         self.rules.extend(more)
 
-    def run(self, playbookfile, tags=set(), skip_list=frozenset()) -> List:
+    def run(self, playbookfile: TargetFile, tags=set(), skip_list=frozenset()) -> List:
         text = ""
         matches: List = list()
 
@@ -243,9 +259,9 @@ class RulesCollection(object):
                 rule_definition = set(rule.tags)
                 rule_definition.add(rule.id)
                 if set(rule_definition).isdisjoint(skip_list):
-                    matches.extend(rule.matchlines(playbookfile, text))
-                    matches.extend(rule.matchtasks(playbookfile, text))
-                    matches.extend(rule.matchyaml(playbookfile, text))
+                    matches.extend(rule.matchlines(file=playbookfile, text=text))
+                    matches.extend(rule.matchtasks(file=playbookfile, text=text))
+                    matches.extend(rule.matchyaml(file=playbookfile, text=text))
 
         return matches
 

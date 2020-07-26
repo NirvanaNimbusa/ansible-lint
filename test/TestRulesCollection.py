@@ -43,7 +43,8 @@ def bracketsmatchtestfile():
 
 
 def test_load_collection_from_directory(test_rules_collection):
-    assert len(test_rules_collection) == 2
+    # 2 collections loaded plus the implicit one
+    assert len(test_rules_collection) == 3
 
 
 def test_run_collection(test_rules_collection, ematchtestfile):

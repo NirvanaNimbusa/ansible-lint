@@ -1,4 +1,10 @@
+from typing import TYPE_CHECKING, List
+
 from ansiblelint.rules import AnsibleLintRule
+
+if TYPE_CHECKING:
+    from ansiblelint.errors import MatchError
+    from ansiblelint.file_utils import TargetFile
 
 
 class UnsetVariableMatcherRule(AnsibleLintRule):
@@ -8,5 +14,7 @@ class UnsetVariableMatcherRule(AnsibleLintRule):
                   'post templating that still contain {{'
     tags = ['fake', 'dummy', 'test2']
 
-    def match(self, filename, line):
-        return "{{" in line
+    def match(self, file: "TargetFile", line: str = "") -> List["MatchError"]:
+        if "{{" in line:
+            return [self.create_matcherror()]
+        return []
